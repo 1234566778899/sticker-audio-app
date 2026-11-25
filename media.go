@@ -73,7 +73,11 @@ func makeStaticWebP(input, workdir string) ([]byte, error) {
 // makeOgg recorta a maxSecs y convierte a OGG Opus mono 48 kHz (formato de nota de voz de WhatsApp).
 func makeOgg(input, workdir string, maxSecs int) ([]byte, uint32, error) {
 	out := filepath.Join(workdir, "audio.ogg")
-	if o, err := exec.Command("ffmpeg", "-y", "-loglevel", "error", "-i", input, "-vn", "-t", fmt.Sprint(maxSecs),
+	if o, err := exec.Command("ffmpeg", "-y", "-loglevel", "error", "-i", input, "-vn",
+		// sin metadatos: los MP3 de editores como CapCut traen etiquetas enormes que,
+		// copiadas al OGG, hacen que WhatsApp no reproduzca el sonido del sticker
+		"-map_metadata", "-1", "-map_chapters", "-1", "-fflags", "+bitexact",
+		"-t", fmt.Sprint(maxSecs),
 		"-af", "loudnorm=I=-16:TP=-1.5", "-c:a", "libopus", "-b:a", "48k", "-ac", "1", "-ar", "48000", out).CombinedOutput(); err != nil {
 		return nil, 0, fmt.Errorf("ffmpeg audio: %v %s", err, o)
 	}

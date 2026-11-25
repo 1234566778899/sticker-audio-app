@@ -152,9 +152,9 @@ func deliver(code string, chat types.JID) error {
 
 // ensureProcessed genera (una sola vez) el WebP y el OGG, y los guarda en el bucket público.
 // Imagen -> sticker estático + audio ≤10 s. Video -> sticker animado + audio ≤5 s.
-// Los archivos van en "<id>/v2/": versiones anteriores (siempre animadas) se regeneran.
+// Los archivos van en "<id>/v3/": versiones anteriores (animadas o con metadatos) se regeneran.
 func ensureProcessed(st *Sticker) (webp, ogg []byte, secs uint32, animated bool, err error) {
-	if st.WebpPath != nil && st.OggPath != nil && strings.HasPrefix(*st.WebpPath, st.ID+"/v2/") {
+	if st.WebpPath != nil && st.OggPath != nil && strings.HasPrefix(*st.WebpPath, st.ID+"/v3/") {
 		w, err1 := supa.Download("stickers", *st.WebpPath)
 		o, err2 := supa.Download("stickers", *st.OggPath)
 		if err1 == nil && err2 == nil {
@@ -199,7 +199,7 @@ func ensureProcessed(st *Sticker) (webp, ogg []byte, secs uint32, animated bool,
 	if animated {
 		kind = "anim"
 	}
-	wp, op := st.ID+"/v2/sticker-"+kind+".webp", st.ID+"/v2/audio.ogg"
+	wp, op := st.ID+"/v3/sticker-"+kind+".webp", st.ID+"/v3/audio.ogg"
 	if err = supa.Upload("stickers", wp, "image/webp", webp); err != nil {
 		return
 	}
