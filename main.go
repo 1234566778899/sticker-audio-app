@@ -257,6 +257,15 @@ func main() {
 	if sessionDB == "" {
 		sessionDB = "session.db"
 	}
+	// crea la carpeta de la sesión (ej. /data en Railway) si no existe
+	if dir := filepath.Dir(sessionDB); dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			panic(fmt.Sprintf("no se pudo crear %s: %v", dir, err))
+		}
+	}
+	if _, err := os.Stat(filepath.Dir(sessionDB)); err == nil && os.Getenv("RAILWAY_VOLUME_MOUNT_PATH") == "" && os.Getenv("RAILWAY_ENVIRONMENT") != "" {
+		log.Warnf("No hay un volumen de Railway: la sesión de WhatsApp se perderá en cada despliegue. Monta un volumen en %s", filepath.Dir(sessionDB))
+	}
 	db, err := sql.Open("sqlite", "file:"+sessionDB+"?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		panic(err)

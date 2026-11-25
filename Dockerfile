@@ -9,6 +9,7 @@ RUN go mod vendor && sh patch-whatsmeow.sh && CGO_ENABLED=0 go build -mod=vendor
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg webp ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
+RUN mkdir -p /data
 COPY --from=build /stickerbot /app/stickerbot
 # Monta un volumen de Railway en /data para no perder la sesión de WhatsApp
 ENV SESSION_DB=/data/session.db OPEN_QR=false ALLOW_SELF=false
