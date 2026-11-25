@@ -21,6 +21,8 @@ import (
 
 	"github.com/skip2/go-qrcode"
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/appstate"
+	"go.mau.fi/whatsmeow/proto/waCommon"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
@@ -108,8 +110,27 @@ func langOf(text string) string {
 	return "es"
 }
 
-func reply(chat types.JID, text string) {
-	cli.SendMessage(context.Background(), chat, &waE2E.Message{Conversation: proto.String(text)})
+func reply(chat types.JID, text string) (whatsmeow.SendResponse, error) {
+	return cli.SendMessage(context.Background(), chat, &waE2E.Message{Conversation: proto.String(text)})
+}
+
+// deleteChatLater borra el chat en la cuenta del BOT (su teléfono y dispositivos vinculados)
+// unos segundos después de entregar el sticker. El usuario conserva su chat y su sticker.
+// Solo se activa con DELETE_CHATS=true y nunca borra el chat propio ("Tú").
+func deleteChatLater(chat types.JID, isSelfChat bool, last whatsmeow.SendResponse) {
+	if os.Getenv("DELETE_CHATS") != "true" || isSelfChat || last.ID == "" {
+		return
+	}
+	go func() {
+		time.Sleep(8 * time.Second)
+		key := &waCommon.MessageKey{RemoteJID: proto.String(chat.String()), FromMe: proto.Bool(true), ID: proto.String(last.ID)}
+		patch := appstate.BuildDeleteChat(chat, last.Timestamp, key, true)
+		if err := cli.SendAppState(context.Background(), patch); err != nil {
+			log.Warnf("no se pudo borrar el chat %s: %v", chat, err)
+			return
+		}
+		log.Infof("chat %s borrado tras enviar el sticker", chat)
+	}()
 }
 
 func textOf(m *waE2E.Message) string {
@@ -146,14 +167,14 @@ func handleMessage(evt *events.Message) {
 		reply(chat, m["limit"])
 		return
 	}
-	if err := deliver(code, chat, m); err != nil {
+	if err := deliver(code, chat, m, isSelfChat); err != nil {
 		log.Errorf("pedido %s: %v", code, err)
 		supa.Patch("orders", "code=eq."+code, map[string]any{"status": "failed", "error": err.Error()})
 		reply(chat, m["failed"])
 	}
 }
 
-func deliver(code string, chat types.JID, m map[string]string) error {
+func deliver(code string, chat types.JID, m map[string]string, isSelfChat bool) error {
 	order, err := supa.GetOrder(code)
 	if err != nil {
 		return err
@@ -175,7 +196,8 @@ func deliver(code string, chat types.JID, m map[string]string) error {
 	}
 	supa.Patch("orders", "code=eq."+code, map[string]any{"status": "sent", "sent_at": time.Now().UTC().Format(time.RFC3339)})
 	supa.Patch("stickers", "id=eq."+st.ID, map[string]any{"sends": st.Sends + 1})
-	reply(chat, m["done"])
+	last, _ := reply(chat, m["done"])
+	deleteChatLater(chat, isSelfChat, last)
 	return nil
 }
 
@@ -243,9 +265,9 @@ func sendSoundSticker(to types.JID, rawWebp, audio []byte, secs uint32, animated
 	ctx := context.Background()
 	sum := sha256.Sum256(audio)
 	webp, err := addExif(rawWebp, map[string]string{
-		"sticker-pack-id":        "wasap",
-		"sticker-pack-name":      "wasap",
-		"sticker-pack-publisher": "wasap",
+		"sticker-pack-id":        "tuki",
+		"sticker-pack-name":      "Tuki",
+		"sticker-pack-publisher": "Tuki",
 		"sound-sha256":           hex.EncodeToString(sum[:]),
 	})
 	if err != nil {

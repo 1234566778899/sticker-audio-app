@@ -1,4 +1,4 @@
-# wasap — bot de WhatsApp (Go + whatsmeow)
+# Tuki — bot de WhatsApp (Go + whatsmeow)
 
 Responder en español. Repo **público**: nunca versionar `.env`, `session.db` ni claves.
 Despliega en **Railway** (servicio `sticker-audio-app`, Dockerfile) con cada push a `main`.
@@ -17,7 +17,7 @@ Despliega en **Railway** (servicio `sticker-audio-app`, Dockerfile) con cada pus
 `Message{AudioStickerMessage: FutureProofMessage{Message: {StickerMessage{…, IsAnimated, Audio: StickerMessage_AudioMessage{AudioMessage{mimetype "audio/ogg; codecs=opus", Seconds, PTT:false}}}}}}`
 
 ## Variables
-`SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `QR_KEY`, `ALLOW_SELF` (true mientras el bot use el número personal), `SESSION_DB` (Docker: `/data/session.db`, volumen), `OPEN_QR=false` en servidor, `LOG`.
+`SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `QR_KEY`, `ALLOW_SELF` (true mientras el bot use el número personal), `SESSION_DB` (Docker: `/data/session.db`, volumen), `OPEN_QR=false` en servidor, `LOG`, `DELETE_CHATS` (true = borra el chat en la cuenta del bot 8 s después de entregar; nunca el chat propio. Solo usar con número dedicado).
 
 ## Local
 ```bash
