@@ -270,6 +270,7 @@ func main() {
 		panic(err)
 	}
 	cli = whatsmeow.NewClient(device, waLog.Stdout("WA", "WARN", true))
+	startHTTP()
 	cli.AddEventHandler(func(e any) {
 		switch v := e.(type) {
 		case *events.Message:
@@ -289,13 +290,14 @@ func main() {
 		go func() {
 			for evt := range qrChan {
 				if evt.Event == "code" {
+					setQR(evt.Code, "esperando escaneo")
 					qrcode.WriteFile(evt.Code, qrcode.Medium, 480, "qr.png")
 					if os.Getenv("OPEN_QR") != "false" {
 						exec.Command("open", "qr.png").Run()
 					}
-					// En servidor (Railway) el QR se imprime en los logs como texto
-					fmt.Println("QR:", evt.Code)
+					log.Infof("QR nuevo disponible en /qr?key=…")
 				} else {
+					setQR("", evt.Event)
 					log.Infof("QR: %s", evt.Event)
 				}
 			}

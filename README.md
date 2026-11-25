@@ -21,8 +21,11 @@ go build -mod=vendor -o stickerbot . && ./stickerbot
 La primera vez muestra un QR (`qr.png`): escanéalo desde WhatsApp → Dispositivos vinculados.
 
 ## Railway
-Usa el `Dockerfile`. Agrega un **volumen montado en `/data`** (ahí vive `session.db`) y las variables
-`SUPABASE_URL`, `SUPABASE_SECRET_KEY`. El QR sale en los logs como texto (`QR: ...`).
+1. Usa el `Dockerfile` (detectado automáticamente).
+2. Agrega un **volumen montado en `/data`** (ahí vive `session.db`; sin él se pierde la vinculación en cada deploy).
+3. Variables: `SUPABASE_URL`, `SUPABASE_SECRET_KEY` y `QR_KEY` (una clave larga inventada por ti).
+4. Healthcheck path: `/health`.
+5. Abre `https://<tu-servicio>.up.railway.app/qr?key=<QR_KEY>` y escanea el QR con el WhatsApp **del número del bot**.
 
 > `patch-whatsmeow.sh` agrega a whatsmeow la clasificación del envoltorio `AudioStickerMessage` como sticker.
 
