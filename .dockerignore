@@ -1,0 +1,6 @@
+vendor
+session.db*
+stickerbot
+qr.png
+.env
+testdata

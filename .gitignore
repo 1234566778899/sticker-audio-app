@@ -1,0 +1,13 @@
+# secretos y sesión de WhatsApp (NUNCA subir)
+.env
+.env.*
+!.env.example
+session.db
+session.db-*
+qr.png
+# compilados / dependencias
+stickerbot
+vendor/
+tmp/
+*.log
+.DS_Store
