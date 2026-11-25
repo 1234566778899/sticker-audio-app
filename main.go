@@ -81,6 +81,33 @@ func allowed(jid string) bool {
 	return true
 }
 
+// Mensajes del bot en español e inglés. El idioma sale del texto que envía la web
+// ("¡Hola! Quiero mi sticker…" / "Hi! I want my sticker…").
+var msgs = map[string]map[string]string{
+	"es": {
+		"limit":     "⏳ Pediste muchos stickers seguidos. Intenta de nuevo en un rato.",
+		"failed":    "😕 No pudimos preparar tu sticker. Vuelve a intentarlo desde la web.",
+		"notfound":  "🤔 No encontramos ese código. Revisa que esté bien escrito o crea tu sticker en la web.",
+		"preparing": "🎨 ¡Preparando tu sticker con sonido!",
+		"done":      "✅ ¡Listo! Toca el 🔊 para escucharlo.\n⭐ Para guardarlo: mantenlo presionado → *Añadir a favoritos*.",
+	},
+	"en": {
+		"limit":     "⏳ You requested a lot of stickers in a row. Please try again in a while.",
+		"failed":    "😕 We couldn't prepare your sticker. Please try again from the website.",
+		"notfound":  "🤔 We couldn't find that code. Check it's spelled right or create your sticker on the website.",
+		"preparing": "🎨 Preparing your sticker with sound!",
+		"done":      "✅ Done! Tap the 🔊 to listen.\n⭐ To save it: press and hold → *Add to favorites*.",
+	},
+}
+
+func langOf(text string) string {
+	t := strings.ToLower(text)
+	if strings.Contains(t, "want my sticker") || strings.HasPrefix(strings.TrimSpace(t), "hi") || strings.HasPrefix(strings.TrimSpace(t), "hello") {
+		return "en"
+	}
+	return "es"
+}
+
 func reply(chat types.JID, text string) {
 	cli.SendMessage(context.Background(), chat, &waE2E.Message{Conversation: proto.String(text)})
 }
@@ -104,7 +131,9 @@ func handleMessage(evt *events.Message) {
 	if evt.Info.IsGroup || time.Since(evt.Info.Timestamp) > 10*time.Minute {
 		return
 	}
-	code := strings.ToUpper(codeRe.FindString(textOf(evt.Message)))
+	msgText := textOf(evt.Message)
+	code := strings.ToUpper(codeRe.FindString(msgText))
+	m := msgs[langOf(msgText)]
 	if code == "" {
 		return
 	}
@@ -114,27 +143,27 @@ func handleMessage(evt *events.Message) {
 	defer busy.Delete(code)
 	chat := evt.Info.Chat
 	if !allowed(chat.String()) {
-		reply(chat, "⏳ Pediste muchos stickers seguidos. Intenta de nuevo en un rato.")
+		reply(chat, m["limit"])
 		return
 	}
-	if err := deliver(code, chat); err != nil {
+	if err := deliver(code, chat, m); err != nil {
 		log.Errorf("pedido %s: %v", code, err)
 		supa.Patch("orders", "code=eq."+code, map[string]any{"status": "failed", "error": err.Error()})
-		reply(chat, "😕 No pudimos preparar tu sticker. Vuelve a intentarlo desde la web.")
+		reply(chat, m["failed"])
 	}
 }
 
-func deliver(code string, chat types.JID) error {
+func deliver(code string, chat types.JID, m map[string]string) error {
 	order, err := supa.GetOrder(code)
 	if err != nil {
 		return err
 	}
 	if order == nil {
-		reply(chat, "🤔 No encontramos ese código. Revisa que esté bien escrito o crea tu sticker en la web.")
+		reply(chat, m["notfound"])
 		return nil
 	}
 	supa.Patch("orders", "code=eq."+code, map[string]any{"status": "processing", "requester_jid": chat.String()})
-	reply(chat, "🎨 ¡Preparando tu sticker con sonido!")
+	reply(chat, m["preparing"])
 
 	st := order.Sticker
 	webp, ogg, secs, animated, err := ensureProcessed(&st)
@@ -146,7 +175,7 @@ func deliver(code string, chat types.JID) error {
 	}
 	supa.Patch("orders", "code=eq."+code, map[string]any{"status": "sent", "sent_at": time.Now().UTC().Format(time.RFC3339)})
 	supa.Patch("stickers", "id=eq."+st.ID, map[string]any{"sends": st.Sends + 1})
-	reply(chat, "✅ ¡Listo! Toca el 🔊 para escucharlo.\n⭐ Para guardarlo: mantenlo presionado → *Añadir a favoritos*.")
+	reply(chat, m["done"])
 	return nil
 }
 
