@@ -137,11 +137,11 @@ func deliver(code string, chat types.JID) error {
 	reply(chat, "🎨 ¡Preparando tu sticker con sonido!")
 
 	st := order.Sticker
-	webp, ogg, secs, err := ensureProcessed(&st)
+	webp, ogg, secs, animated, err := ensureProcessed(&st)
 	if err != nil {
 		return err
 	}
-	if err := sendSoundSticker(chat, webp, ogg, secs); err != nil {
+	if err := sendSoundSticker(chat, webp, ogg, secs, animated); err != nil {
 		return err
 	}
 	supa.Patch("orders", "code=eq."+code, map[string]any{"status": "sent", "sent_at": time.Now().UTC().Format(time.RFC3339)})
@@ -150,59 +150,67 @@ func deliver(code string, chat types.JID) error {
 	return nil
 }
 
-// ensureProcessed genera (una sola vez) el WebP animado y el OGG, y los guarda en el bucket público.
-func ensureProcessed(st *Sticker) ([]byte, []byte, uint32, error) {
-	if st.WebpPath != nil && st.OggPath != nil {
-		webp, err1 := supa.Download("stickers", *st.WebpPath)
-		ogg, err2 := supa.Download("stickers", *st.OggPath)
+// ensureProcessed genera (una sola vez) el WebP y el OGG, y los guarda en el bucket público.
+// Imagen -> sticker estático + audio ≤10 s. Video -> sticker animado + audio ≤5 s.
+// Los archivos van en "<id>/v2/": versiones anteriores (siempre animadas) se regeneran.
+func ensureProcessed(st *Sticker) (webp, ogg []byte, secs uint32, animated bool, err error) {
+	if st.WebpPath != nil && st.OggPath != nil && strings.HasPrefix(*st.WebpPath, st.ID+"/v2/") {
+		w, err1 := supa.Download("stickers", *st.WebpPath)
+		o, err2 := supa.Download("stickers", *st.OggPath)
 		if err1 == nil && err2 == nil {
 			dir, _ := os.MkdirTemp("", "stk")
 			defer os.RemoveAll(dir)
 			p := filepath.Join(dir, "a.ogg")
-			os.WriteFile(p, ogg, 0o644)
-			return webp, ogg, durationSeconds(p), nil
+			os.WriteFile(p, o, 0o644)
+			return w, o, durationSeconds(p), strings.HasSuffix(*st.WebpPath, "anim.webp"), nil
 		}
 	}
 	dir, err := os.MkdirTemp("", "stk")
 	if err != nil {
-		return nil, nil, 0, err
+		return
 	}
 	defer os.RemoveAll(dir)
 	img, err := supa.Download("uploads", st.ImagePath)
 	if err != nil {
-		return nil, nil, 0, err
+		return
 	}
 	aud, err := supa.Download("uploads", st.AudioPath)
 	if err != nil {
-		return nil, nil, 0, err
+		return
 	}
 	imgFile := filepath.Join(dir, "in"+filepath.Ext(st.ImagePath))
 	audFile := filepath.Join(dir, "in_audio"+filepath.Ext(st.AudioPath))
 	os.WriteFile(imgFile, img, 0o644)
 	os.WriteFile(audFile, aud, 0o644)
 	ct := http.DetectContentType(img)
-	isVideo := strings.HasPrefix(ct, "video/") || strings.Contains(".mp4.mov.webm.m4v", strings.ToLower(filepath.Ext(st.ImagePath)))
+	animated = strings.HasPrefix(ct, "video/") || strings.Contains(".mp4.mov.webm.m4v", strings.ToLower(filepath.Ext(st.ImagePath)))
 
-	webp, err := makeWebP(imgFile, isVideo, dir)
-	if err != nil {
-		return nil, nil, 0, err
+	if webp, err = makeWebP(imgFile, animated, dir); err != nil {
+		return
 	}
-	ogg, secs, err := makeOgg(audFile, dir)
-	if err != nil {
-		return nil, nil, 0, err
+	maxSecs := maxAudioStatic
+	if animated {
+		maxSecs = maxAudioAnimated
 	}
-	wp, op := st.ID+"/sticker.webp", st.ID+"/audio.ogg"
-	if err := supa.Upload("stickers", wp, "image/webp", webp); err != nil {
-		return nil, nil, 0, err
+	if ogg, secs, err = makeOgg(audFile, dir, maxSecs); err != nil {
+		return
 	}
-	if err := supa.Upload("stickers", op, "audio/ogg", ogg); err != nil {
-		return nil, nil, 0, err
+	kind := "static"
+	if animated {
+		kind = "anim"
+	}
+	wp, op := st.ID+"/v2/sticker-"+kind+".webp", st.ID+"/v2/audio.ogg"
+	if err = supa.Upload("stickers", wp, "image/webp", webp); err != nil {
+		return
+	}
+	if err = supa.Upload("stickers", op, "audio/ogg", ogg); err != nil {
+		return
 	}
 	supa.Patch("stickers", "id=eq."+st.ID, map[string]any{"webp_path": wp, "ogg_path": op})
-	return webp, ogg, secs, nil
+	return webp, ogg, secs, animated, nil
 }
 
-func sendSoundSticker(to types.JID, rawWebp, audio []byte, secs uint32) error {
+func sendSoundSticker(to types.JID, rawWebp, audio []byte, secs uint32, animated bool) error {
 	ctx := context.Background()
 	sum := sha256.Sum256(audio)
 	webp, err := addExif(rawWebp, map[string]string{
@@ -227,7 +235,7 @@ func sendSoundSticker(to types.JID, rawWebp, audio []byte, secs uint32) error {
 		URL: proto.String(up.URL), DirectPath: proto.String(up.DirectPath), MediaKey: up.MediaKey,
 		FileEncSHA256: up.FileEncSHA256, FileSHA256: up.FileSHA256, FileLength: proto.Uint64(up.FileLength),
 		Mimetype: proto.String("image/webp"), Width: proto.Uint32(512), Height: proto.Uint32(512),
-		IsAnimated: proto.Bool(true), IsLottie: proto.Bool(false), IsAvatar: proto.Bool(false), IsAiSticker: proto.Bool(false),
+		IsAnimated: proto.Bool(animated), IsLottie: proto.Bool(false), IsAvatar: proto.Bool(false), IsAiSticker: proto.Bool(false),
 		MediaKeyTimestamp: proto.Int64(now.Unix()), StickerSentTS: proto.Int64(now.UnixMilli()),
 		Audio: &waE2E.StickerMessage_AudioMessage{AudioMessage: &waE2E.AudioMessage{
 			URL: proto.String(ua.URL), DirectPath: proto.String(ua.DirectPath), MediaKey: ua.MediaKey,

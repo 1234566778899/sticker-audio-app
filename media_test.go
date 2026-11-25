@@ -21,11 +21,15 @@ func TestMedia(t *testing.T) {
 		}
 		os.WriteFile(dir+"/../out.webp", x, 0o644)
 		t.Logf("%s -> webp %d KB (con exif %d KB)", c.in, len(w)/1024, len(x)/1024)
-		if len(x) > 500_000 {
-			t.Fatalf("pesa demasiado")
+		limit := 500_000
+		if !c.video {
+			limit = 100_000
+		}
+		if len(x) > limit {
+			t.Fatalf("pesa demasiado: %d", len(x))
 		}
 	}
-	o, secs, err := makeOgg("testdata/aud.m4a", t.TempDir())
+	o, secs, err := makeOgg("testdata/aud.m4a", t.TempDir(), maxAudioStatic)
 	if err != nil {
 		t.Fatal(err)
 	}

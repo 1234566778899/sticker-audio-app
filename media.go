@@ -11,21 +11,23 @@ import (
 	"strings"
 )
 
-// makeWebP convierte cualquier imagen o video en un sticker WebP animado 512x512 (<500 KB).
-// Imagen fija -> animación de "rebote"; video -> hasta 6 s a 12 fps.
+// Límites de audio de WhatsApp para stickers con sonido:
+// sticker estático (imagen) hasta 10 s; sticker animado (video) hasta 5 s.
+const (
+	maxAudioStatic   = 10
+	maxAudioAnimated = 5
+)
+
+// makeWebP convierte una imagen en sticker WebP ESTÁTICO 512x512 (<100 KB) o un video
+// en sticker ANIMADO (<500 KB, hasta 6 s a 12 fps).
 func makeWebP(input string, isVideo bool, workdir string) ([]byte, error) {
+	if !isVideo {
+		return makeStaticWebP(input, workdir)
+	}
 	frames := filepath.Join(workdir, "f")
 	os.MkdirAll(frames, 0o755)
-	var args []string
 	fit := "scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=0x00000000"
-	if isVideo {
-		args = []string{"-y", "-loglevel", "error", "-i", input, "-t", "6", "-vf", "fps=12," + fit + ",format=rgba", filepath.Join(frames, "%03d.png")}
-	} else {
-		bounce := "format=rgba,scale=440:440:force_original_aspect_ratio=decrease," +
-			"scale=w='trunc(iw*(1+0.07*sin(2*PI*n/16))/2)*2':h=-2:eval=frame," +
-			"pad=512:512:(ow-iw)/2:(oh-ih)/2:color=0x00000000"
-		args = []string{"-y", "-loglevel", "error", "-loop", "1", "-i", input, "-frames:v", "16", "-vf", bounce, filepath.Join(frames, "%03d.png")}
-	}
+	args := []string{"-y", "-loglevel", "error", "-i", input, "-t", "6", "-vf", "fps=12," + fit + ",format=rgba", filepath.Join(frames, "%03d.png")}
 	if out, err := exec.Command("ffmpeg", args...).CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("ffmpeg frames: %v %s", err, out)
 	}
@@ -33,10 +35,7 @@ func makeWebP(input string, isVideo bool, workdir string) ([]byte, error) {
 	if len(list) == 0 {
 		return nil, fmt.Errorf("no se generaron cuadros")
 	}
-	delay := "60"
-	if isVideo {
-		delay = "83"
-	}
+	delay := "83"
 	out := filepath.Join(workdir, "sticker.webp")
 	for _, q := range []string{"70", "50", "35", "20"} { // baja calidad hasta que pese < 500 KB
 		a := []string{"-loop", "0", "-lossy", "-q", q, "-m", "4", "-d", delay}
@@ -52,10 +51,29 @@ func makeWebP(input string, isVideo bool, workdir string) ([]byte, error) {
 	return os.ReadFile(out)
 }
 
-// makeOgg recorta a 10 s y convierte a OGG Opus mono 48 kHz (formato de nota de voz de WhatsApp).
-func makeOgg(input, workdir string) ([]byte, uint32, error) {
+// makeStaticWebP: una sola imagen 512x512 con transparencia, WebP con cabecera VP8X (<100 KB).
+func makeStaticWebP(input, workdir string) ([]byte, error) {
+	png := filepath.Join(workdir, "frame.png")
+	fit := "format=rgba,scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=0x00000000"
+	if o, err := exec.Command("ffmpeg", "-y", "-loglevel", "error", "-i", input, "-frames:v", "1", "-vf", fit, png).CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("ffmpeg imagen: %v %s", err, o)
+	}
+	out := filepath.Join(workdir, "sticker.webp")
+	for _, q := range []string{"80", "65", "50", "35", "20"} { // baja calidad hasta que pese < 100 KB
+		if o, err := exec.Command("cwebp", "-quiet", "-q", q, "-alpha_q", "90", "-m", "6", "-exact", png, "-o", out).CombinedOutput(); err != nil {
+			return nil, fmt.Errorf("cwebp: %v %s", err, o)
+		}
+		if st, _ := os.Stat(out); st != nil && st.Size() < 98_000 {
+			break
+		}
+	}
+	return os.ReadFile(out)
+}
+
+// makeOgg recorta a maxSecs y convierte a OGG Opus mono 48 kHz (formato de nota de voz de WhatsApp).
+func makeOgg(input, workdir string, maxSecs int) ([]byte, uint32, error) {
 	out := filepath.Join(workdir, "audio.ogg")
-	if o, err := exec.Command("ffmpeg", "-y", "-loglevel", "error", "-i", input, "-vn", "-t", "10",
+	if o, err := exec.Command("ffmpeg", "-y", "-loglevel", "error", "-i", input, "-vn", "-t", fmt.Sprint(maxSecs),
 		"-af", "loudnorm=I=-16:TP=-1.5", "-c:a", "libopus", "-b:a", "48k", "-ac", "1", "-ar", "48000", out).CombinedOutput(); err != nil {
 		return nil, 0, fmt.Errorf("ffmpeg audio: %v %s", err, o)
 	}
@@ -97,8 +115,19 @@ func addExif(webp []byte, meta map[string]string) ([]byte, error) {
 		}
 		o += 8 + size + size%2
 	}
-	if len(chunks) == 0 || chunks[0].cc != "VP8X" {
-		return nil, fmt.Errorf("el WebP no tiene cabecera VP8X")
+	if len(chunks) == 0 {
+		return nil, fmt.Errorf("WebP vacío")
+	}
+	if chunks[0].cc != "VP8X" {
+		// WebP simple (VP8/VP8L): se crea la cabecera extendida para poder llevar EXIF
+		w, h := 512, 512
+		vp8x := make([]byte, 10)
+		vp8x[4], vp8x[5], vp8x[6] = byte((w-1)&0xff), byte((w-1)>>8), 0
+		vp8x[7], vp8x[8], vp8x[9] = byte((h-1)&0xff), byte((h-1)>>8), 0
+		if chunks[0].cc == "VP8L" {
+			vp8x[0] |= 0x10 // VP8L puede llevar alfa
+		}
+		chunks = append([]chunk{{"VP8X", vp8x}}, chunks...)
 	}
 	chunks[0].data[0] |= 0x20
 	payload, _ := json.Marshal(meta)
