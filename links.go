@@ -293,7 +293,7 @@ func runLink(s *linkSession, order *Order, phone, lang string, ready chan<- erro
 
 // sendToSelf manda el sticker (y un texto corto) al chat propio del usuario vinculado.
 func sendToSelf(ctx context.Context, c *whatsmeow.Client, order *Order, lang string) error {
-	supa.Patch("orders", "code=eq."+order.Code, map[string]any{"status": "processing", "requester_jid": "self:" + c.Store.ID.User})
+	supa.Patch("orders", "code=eq."+order.Code, map[string]any{"status": "processing", "requester_jid": "self"}) // no guardamos el número del usuario
 	st := order.Sticker
 	webp, ogg, secs, animated, err := ensureProcessed(&st)
 	if err != nil {
