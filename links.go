@@ -56,6 +56,7 @@ type linkSession struct {
 	QR        string    `json:"qr,omitempty"` // data:image/png;base64,…
 	Error     string    `json:"error,omitempty"`
 	CreatedAt time.Time `json:"-"`
+	cancel    context.CancelFunc
 }
 
 var (
@@ -159,6 +160,7 @@ var (
 func runLink(s *linkSession, order *Order, phone, lang string, ready chan<- error) {
 	ctx, cancel := context.WithTimeout(context.Background(), linkTimeout)
 	defer cancel()
+	s.set(func(s *linkSession) { s.cancel = cancel }) // DELETE /link/{id} ("Generar otro código")
 	device := linkStore.NewDevice()
 	c := whatsmeow.NewClient(device, waLog.Stdout("LINK", "WARN", true))
 	c.ManualHistorySyncDownload = true // nunca bajamos el historial de chats del usuario
@@ -235,7 +237,12 @@ func runLink(s *linkSession, order *Order, phone, lang string, ready chan<- erro
 		select {
 		case <-ctx.Done():
 			signalReady(errors.New("timeout"))
-			finish("expired", "")
+			links.Lock()
+			cancelled := s.Status == "cancelled"
+			links.Unlock()
+			if !cancelled {
+				finish("expired", "")
+			}
 			return
 		case <-loggedOut:
 			signalReady(errors.New("logged out"))
@@ -388,6 +395,16 @@ func registerLinkRoutes(mux *http.ServeMux) {
 			writeJSON(w, 200, out)
 		}
 	})
+	mux.HandleFunc("DELETE /link/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(w, r) {
+			return
+		}
+		if !cancelLink(r.PathValue("id")) {
+			writeJSON(w, 409, map[string]string{"error": "not_cancellable"})
+			return
+		}
+		writeJSON(w, 200, map[string]string{"status": "cancelled"})
+	})
 	mux.HandleFunc("GET /link/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(w, r) {
 			return
@@ -408,3 +425,19 @@ func registerLinkRoutes(mux *http.ServeMux) {
 }
 
 var notDigits = regexp.MustCompile(`[^0-9]`)
+
+// cancelLink corta una vinculación que todavía no se completó (para pedir un código nuevo).
+// Si ya se vinculó y está enviando, no se corta.
+func cancelLink(id string) bool {
+	links.Lock()
+	defer links.Unlock()
+	s, ok := links.m[id]
+	if !ok || s.Status != "waiting" {
+		return false
+	}
+	s.Status, s.PairCode, s.QR = "cancelled", "", ""
+	if s.cancel != nil {
+		s.cancel()
+	}
+	return true
+}
