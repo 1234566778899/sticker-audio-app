@@ -91,14 +91,16 @@ var msgs = map[string]map[string]string{
 		"failed":    "😕 No pudimos preparar tu sticker. Vuelve a intentarlo desde la web.",
 		"notfound":  "🤔 No encontramos ese código. Revisa que esté bien escrito o crea tu sticker en la web.",
 		"preparing": "🎨 ¡Preparando tu sticker con sonido!",
-		"done":      "✅ ¡Listo! Toca el 🔊 para escucharlo.\n⭐ Para guardarlo: mantenlo presionado → *Añadir a favoritos*.",
+		"done":      "✅ ¡Listo! Toca el 🔊 para escucharlo.\n⭐ Para guardarlo: mantenlo presionado → *Añadir a favoritos*.\n🎨 Crea más en https://wasap.site",
+		"selfDone":  "✅ Tu sticker de Tuki. Toca el 🔊 para escucharlo.\n⭐ Para guardarlo: mantenlo presionado → *Añadir a favoritos*.\n🎨 Crea más en https://wasap.site\nTuki ya cerró la sesión en tu WhatsApp.",
 	},
 	"en": {
 		"limit":     "⏳ You requested a lot of stickers in a row. Please try again in a while.",
 		"failed":    "😕 We couldn't prepare your sticker. Please try again from the website.",
 		"notfound":  "🤔 We couldn't find that code. Check it's spelled right or create your sticker on the website.",
 		"preparing": "🎨 Preparing your sticker with sound!",
-		"done":      "✅ Done! Tap the 🔊 to listen.\n⭐ To save it: press and hold → *Add to favorites*.",
+		"done":      "✅ Done! Tap the 🔊 to listen.\n⭐ To save it: press and hold → *Add to favorites*.\n🎨 Make more at https://wasap.site",
+		"selfDone":  "✅ Your Tuki sticker. Tap the 🔊 to listen.\n⭐ To save it: press and hold → *Add to favorites*.\n🎨 Make more at https://wasap.site\nTuki has already logged out of your WhatsApp.",
 	},
 }
 
@@ -191,7 +193,7 @@ func deliver(code string, chat types.JID, m map[string]string, isSelfChat bool) 
 	if err != nil {
 		return err
 	}
-	if err := sendSoundSticker(chat, webp, ogg, secs, animated); err != nil {
+	if err := sendSoundSticker(cli, chat, webp, ogg, secs, animated); err != nil {
 		return err
 	}
 	supa.Patch("orders", "code=eq."+code, map[string]any{"status": "sent", "sent_at": time.Now().UTC().Format(time.RFC3339)})
@@ -261,23 +263,24 @@ func ensureProcessed(st *Sticker) (webp, ogg []byte, secs uint32, animated bool,
 	return webp, ogg, secs, animated, nil
 }
 
-func sendSoundSticker(to types.JID, rawWebp, audio []byte, secs uint32, animated bool) error {
+func sendSoundSticker(c *whatsmeow.Client, to types.JID, rawWebp, audio []byte, secs uint32, animated bool) error {
 	ctx := context.Background()
 	sum := sha256.Sum256(audio)
 	webp, err := addExif(rawWebp, map[string]string{
-		"sticker-pack-id":        "tuki",
-		"sticker-pack-name":      "Tuki",
-		"sticker-pack-publisher": "Tuki",
+		"sticker-pack-id": "tuki",
+		// al tocar el sticker en WhatsApp se ve el paquete y el autor: ahí va la web
+		"sticker-pack-name":      "Tuki · wasap.site",
+		"sticker-pack-publisher": "Hecho en wasap.site",
 		"sound-sha256":           hex.EncodeToString(sum[:]),
 	})
 	if err != nil {
 		return err
 	}
-	up, err := cli.Upload(ctx, webp, whatsmeow.MediaImage)
+	up, err := c.Upload(ctx, webp, whatsmeow.MediaImage)
 	if err != nil {
 		return fmt.Errorf("subiendo sticker: %w", err)
 	}
-	ua, err := cli.Upload(ctx, audio, whatsmeow.MediaAudio)
+	ua, err := c.Upload(ctx, audio, whatsmeow.MediaAudio)
 	if err != nil {
 		return fmt.Errorf("subiendo audio: %w", err)
 	}
@@ -296,7 +299,7 @@ func sendSoundSticker(to types.JID, rawWebp, audio []byte, secs uint32, animated
 		}},
 	}
 	msg := &waE2E.Message{AudioStickerMessage: &waE2E.FutureProofMessage{Message: &waE2E.Message{StickerMessage: sticker}}}
-	_, err = cli.SendMessage(ctx, to, msg)
+	_, err = c.SendMessage(ctx, to, msg)
 	return err
 }
 
@@ -311,6 +314,17 @@ func main() {
 	supa = newSupa()
 	if supa.URL == "" || supa.Key == "" {
 		panic("faltan SUPABASE_URL / SUPABASE_SECRET_KEY")
+	}
+	if err := initLinks(ctx); err != nil {
+		panic(fmt.Sprintf("no se pudo preparar la base de vinculaciones: %v", err))
+	}
+	go gcLinks()
+	// MAIN_BOT=false: sin número propio del bot; solo "Enviármelo con mi WhatsApp" (/link).
+	if os.Getenv("MAIN_BOT") == "false" {
+		log.Infof("MAIN_BOT=false: sin número del bot, solo envíos con la cuenta del usuario")
+		startHTTP()
+		waitSignal()
+		return
 	}
 	sessionDB := os.Getenv("SESSION_DB")
 	if sessionDB == "" {
@@ -374,8 +388,12 @@ func main() {
 		panic(err)
 	}
 
+	waitSignal()
+	cli.Disconnect()
+}
+
+func waitSignal() {
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	<-c
-	cli.Disconnect()
 }
