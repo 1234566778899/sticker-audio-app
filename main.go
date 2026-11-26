@@ -360,36 +360,57 @@ func main() {
 		case *events.Connected:
 			log.Infof("Conectado como %s — esperando códigos STK-…", cli.Store.ID)
 		case *events.LoggedOut:
-			log.Errorf("WhatsApp cerró la sesión; borra %s y vuelve a vincular", sessionDB)
+			// sesión vieja o cerrada desde el teléfono: se borra y se reinicia para mostrar un QR nuevo en /qr
+			log.Errorf("WhatsApp cerró la sesión (%v); se borra y se reinicia para vincular de nuevo", v.Reason)
+			if err := cli.Store.Delete(context.Background()); err != nil {
+				log.Errorf("borrando la sesión: %v", err)
+			}
+			os.Exit(1)
 		}
 	})
 
 	if cli.Store.ID == nil {
-		qrChan, _ := cli.GetQRChannel(ctx)
-		if err := cli.Connect(); err != nil {
-			panic(err)
-		}
-		go func() {
-			for evt := range qrChan {
-				if evt.Event == "code" {
-					setQR(evt.Code, "esperando escaneo")
-					qrcode.WriteFile(evt.Code, qrcode.Medium, 480, "qr.png")
-					if os.Getenv("OPEN_QR") != "false" {
-						exec.Command("open", "qr.png").Run()
-					}
-					log.Infof("QR nuevo disponible en /qr?key=…")
-				} else {
-					setQR("", evt.Event)
-					log.Infof("QR: %s", evt.Event)
-				}
-			}
-		}()
+		go pairWithQR(ctx)
 	} else if err := cli.Connect(); err != nil {
 		panic(err)
 	}
 
 	waitSignal()
 	cli.Disconnect()
+}
+
+// pairWithQR muestra QRs en /qr hasta que se escanee uno. Si caducan sin escanear, vuelve a empezar
+// (antes la página se quedaba en "timeout" y había que reiniciar el bot).
+func pairWithQR(ctx context.Context) {
+	for cli.Store.ID == nil {
+		qrChan, err := cli.GetQRChannel(ctx)
+		if err != nil {
+			log.Errorf("QR: %v", err)
+			return
+		}
+		if err := cli.Connect(); err != nil {
+			log.Errorf("conectando para el QR: %v", err)
+			time.Sleep(10 * time.Second)
+			continue
+		}
+		for evt := range qrChan {
+			if evt.Event == "code" {
+				setQR(evt.Code, "esperando escaneo")
+				qrcode.WriteFile(evt.Code, qrcode.Medium, 480, "qr.png")
+				if os.Getenv("OPEN_QR") != "false" {
+					exec.Command("open", "qr.png").Run()
+				}
+				log.Infof("QR nuevo disponible en /qr?key=…")
+			} else {
+				setQR("", evt.Event)
+				log.Infof("QR: %s", evt.Event)
+			}
+		}
+		if cli.Store.ID == nil {
+			cli.Disconnect()
+			time.Sleep(3 * time.Second)
+		}
+	}
 }
 
 func waitSignal() {
