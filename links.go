@@ -70,7 +70,7 @@ var (
 
 // initLinks prepara la base temporal de las sesiones (se borra en cada arranque).
 func initLinks(ctx context.Context) error {
-	store.SetOSInfo("Tuki", [3]uint32{1, 0, 0})
+	store.SetOSInfo("wasap", [3]uint32{1, 0, 0})
 	store.DeviceProps.PlatformType = waCompanionReg.DeviceProps_CHROME.Enum()
 	store.DeviceProps.RequireFullSync = proto.Bool(false)
 	path := filepath.Join(os.TempDir(), "tuki-links.db")

@@ -92,7 +92,7 @@ var msgs = map[string]map[string]string{
 		"notfound":  "🤔 No encontramos ese código. Revisa que esté bien escrito o crea tu sticker en la web.",
 		"preparing": "🎨 ¡Preparando tu sticker con sonido!",
 		"done":      "✅ ¡Listo! Toca el 🔊 para escucharlo.\n⭐ Para guardarlo: mantenlo presionado → *Añadir a favoritos*.\n🎨 Crea más en https://wasap.site",
-		"selfDone":  "✅ Tu sticker de Tuki. Toca el 🔊 para escucharlo.\n⭐ Para guardarlo: mantenlo presionado → *Añadir a favoritos*.\n🎨 Crea más en https://wasap.site\nTuki ya cerró la sesión en tu WhatsApp.",
+		"selfDone":  "✅ Tu sticker de wasap. Toca el 🔊 para escucharlo.\n⭐ Para guardarlo: mantenlo presionado → *Añadir a favoritos*.\n🎨 Crea más en https://wasap.site\nwasap ya cerró la sesión en tu WhatsApp.",
 	},
 	"en": {
 		"limit":     "⏳ You requested a lot of stickers in a row. Please try again in a while.",
@@ -100,7 +100,7 @@ var msgs = map[string]map[string]string{
 		"notfound":  "🤔 We couldn't find that code. Check it's spelled right or create your sticker on the website.",
 		"preparing": "🎨 Preparing your sticker with sound!",
 		"done":      "✅ Done! Tap the 🔊 to listen.\n⭐ To save it: press and hold → *Add to favorites*.\n🎨 Make more at https://wasap.site",
-		"selfDone":  "✅ Your Tuki sticker. Tap the 🔊 to listen.\n⭐ To save it: press and hold → *Add to favorites*.\n🎨 Make more at https://wasap.site\nTuki has already logged out of your WhatsApp.",
+		"selfDone":  "✅ Your wasap sticker. Tap the 🔊 to listen.\n⭐ To save it: press and hold → *Add to favorites*.\n🎨 Make more at https://wasap.site\nwasap has already logged out of your WhatsApp.",
 	},
 }
 
@@ -267,9 +267,9 @@ func sendSoundSticker(c *whatsmeow.Client, to types.JID, rawWebp, audio []byte, 
 	ctx := context.Background()
 	sum := sha256.Sum256(audio)
 	webp, err := addExif(rawWebp, map[string]string{
-		"sticker-pack-id": "tuki",
+		"sticker-pack-id": "wasap",
 		// al tocar el sticker en WhatsApp se ve el paquete y el autor: ahí va la web
-		"sticker-pack-name":      "Tuki · wasap.site",
+		"sticker-pack-name":      "wasap.site",
 		"sticker-pack-publisher": "Hecho en wasap.site",
 		"sound-sha256":           hex.EncodeToString(sum[:]),
 	})
