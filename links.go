@@ -55,6 +55,8 @@ type linkSession struct {
 	PairCode  string    `json:"pairCode,omitempty"`
 	QR        string    `json:"qr,omitempty"` // data:image/png;base64,…
 	Error     string    `json:"error,omitempty"`
+	Closed    bool      `json:"closed"`   // ya se cerró la sesión temporal (siempre al final)
+	LogoutOK  bool      `json:"logoutOk"` // WhatsApp confirmó el cierre: el dispositivo ya no está vinculado
 	CreatedAt time.Time `json:"-"`
 	cancel    context.CancelFunc
 }
@@ -202,11 +204,15 @@ func runLink(s *linkSession, order *Order, phone, lang string, ready chan<- erro
 	defer func() {
 		lctx, lcancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer lcancel()
+		logoutOK := c.Store.ID == nil // si nunca se vinculó, no hay nada que cerrar
 		if c.Store.ID != nil {
 			if err := c.Logout(lctx); err != nil {
 				log.Warnf("link %s: logout: %v", s.Code, err)
+			} else {
+				logoutOK = true
 			}
 		}
+		defer s.set(func(s *linkSession) { s.Closed, s.LogoutOK = true, logoutOK })
 		c.Disconnect()
 		if err := linkStore.DeleteDevice(lctx, device); err != nil && c.Store.ID != nil {
 			log.Warnf("link %s: borrar dispositivo: %v", s.Code, err)
