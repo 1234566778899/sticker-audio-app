@@ -42,6 +42,7 @@ func startHTTP() {
 		w.Write([]byte("ok"))
 	})
 	registerLinkRoutes(mux)
+	registerBotRoutes(mux) // API del bot principal para el admin de la web
 	mux.HandleFunc("/qr", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		if key == "" || subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("key")), []byte(key)) != 1 {

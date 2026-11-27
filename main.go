@@ -5,12 +5,10 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"regexp"
@@ -19,12 +17,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/skip2/go-qrcode"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/appstate"
 	"go.mau.fi/whatsmeow/proto/waCommon"
 	"go.mau.fi/whatsmeow/proto/waE2E"
-	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
@@ -143,6 +139,9 @@ func textOf(m *waE2E.Message) string {
 }
 
 func handleMessage(evt *events.Message) {
+	if cli == nil {
+		return
+	}
 	own := cli.Store.ID
 	if own == nil {
 		return
@@ -319,98 +318,23 @@ func main() {
 		panic(fmt.Sprintf("no se pudo preparar la base de vinculaciones: %v", err))
 	}
 	go gcLinks()
-	// MAIN_BOT=false: sin número propio del bot; solo "Enviármelo con mi WhatsApp" (/link).
-	if os.Getenv("MAIN_BOT") == "false" {
-		log.Infof("MAIN_BOT=false: sin número del bot, solo envíos con la cuenta del usuario")
-		startHTTP()
-		waitSignal()
-		return
+	if dir := filepath.Dir(sessionPath()); os.Getenv("RAILWAY_ENVIRONMENT") != "" && os.Getenv("RAILWAY_VOLUME_MOUNT_PATH") == "" {
+		log.Warnf("No hay un volumen de Railway: la sesión de WhatsApp se perderá en cada despliegue. Monta un volumen en %s", dir)
 	}
-	sessionDB := os.Getenv("SESSION_DB")
-	if sessionDB == "" {
-		sessionDB = "session.db"
-	}
-	// crea la carpeta de la sesión (ej. /data en Railway) si no existe
-	if dir := filepath.Dir(sessionDB); dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			panic(fmt.Sprintf("no se pudo crear %s: %v", dir, err))
-		}
-	}
-	if _, err := os.Stat(filepath.Dir(sessionDB)); err == nil && os.Getenv("RAILWAY_VOLUME_MOUNT_PATH") == "" && os.Getenv("RAILWAY_ENVIRONMENT") != "" {
-		log.Warnf("No hay un volumen de Railway: la sesión de WhatsApp se perderá en cada despliegue. Monta un volumen en %s", filepath.Dir(sessionDB))
-	}
-	db, err := sql.Open("sqlite", "file:"+sessionDB+"?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)")
-	if err != nil {
-		panic(err)
-	}
-	container := sqlstore.NewWithDB(db, "sqlite3", waLog.Stdout("DB", "WARN", true))
-	if err := container.Upgrade(ctx); err != nil {
-		panic(err)
-	}
-	device, err := container.GetFirstDevice(ctx)
-	if err != nil {
-		panic(err)
-	}
-	cli = whatsmeow.NewClient(device, waLog.Stdout("WA", "WARN", true))
 	startHTTP()
-	cli.AddEventHandler(func(e any) {
-		switch v := e.(type) {
-		case *events.Message:
-			go handleMessage(v)
-		case *events.Connected:
-			log.Infof("Conectado como %s — esperando códigos STK-…", cli.Store.ID)
-		case *events.LoggedOut:
-			// sesión vieja o cerrada desde el teléfono: se borra y se reinicia para mostrar un QR nuevo en /qr
-			log.Errorf("WhatsApp cerró la sesión (%v); se borra y se reinicia para vincular de nuevo", v.Reason)
-			if err := cli.Store.Delete(context.Background()); err != nil {
-				log.Errorf("borrando la sesión: %v", err)
-			}
-			os.Exit(1)
+	// Bot principal (número propio): se enciende/apaga desde /admin de la web (settings.bot_enabled).
+	// Si nunca se tocó el interruptor, manda MAIN_BOT.
+	if mainBotWanted() {
+		if err := startMainBot(); err != nil {
+			log.Errorf("no se pudo encender el bot principal: %v", err)
 		}
-	})
-
-	if cli.Store.ID == nil {
-		go pairWithQR(ctx)
-	} else if err := cli.Connect(); err != nil {
-		panic(err)
+	} else {
+		log.Infof("Bot principal apagado: solo envíos con la cuenta del usuario (Envío Directo)")
 	}
-
 	waitSignal()
-	cli.Disconnect()
-}
-
-// pairWithQR muestra QRs en /qr hasta que se escanee uno. Si caducan sin escanear, vuelve a empezar
-// (antes la página se quedaba en "timeout" y había que reiniciar el bot).
-func pairWithQR(ctx context.Context) {
-	for cli.Store.ID == nil {
-		qrChan, err := cli.GetQRChannel(ctx)
-		if err != nil {
-			log.Errorf("QR: %v", err)
-			return
-		}
-		if err := cli.Connect(); err != nil {
-			log.Errorf("conectando para el QR: %v", err)
-			time.Sleep(10 * time.Second)
-			continue
-		}
-		for evt := range qrChan {
-			if evt.Event == "code" {
-				setQR(evt.Code, "esperando escaneo")
-				qrcode.WriteFile(evt.Code, qrcode.Medium, 480, "qr.png")
-				if os.Getenv("OPEN_QR") != "false" {
-					exec.Command("open", "qr.png").Run()
-				}
-				log.Infof("QR nuevo disponible en /qr?key=…")
-			} else {
-				setQR("", evt.Event)
-				log.Infof("QR: %s", evt.Event)
-			}
-		}
-		if cli.Store.ID == nil {
-			cli.Disconnect()
-			time.Sleep(3 * time.Second)
-		}
-	}
+	mainBot.Lock()
+	stopLocked()
+	mainBot.Unlock()
 }
 
 func waitSignal() {
