@@ -20,6 +20,7 @@ import (
 	"github.com/skip2/go-qrcode"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/store/sqlstore"
+	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
 )
@@ -319,6 +320,79 @@ func registerBotRoutes(mux *http.ServeMux) {
 		if auth(w, r) {
 			write(w, 200, currentBotStatus())
 		}
+	})
+	// POST /bot/deliver {"code": "STK-…", "phone": "52…" (opcional), "lang": "es"|"en"}
+	// Reenvía un pedido que quedó sin entregar al chat que lo pidió (requester_jid) o al número indicado.
+	// Solo para quien escribió primero al bot; el admin lo usa a mano.
+	mux.HandleFunc("POST /bot/deliver", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(w, r) {
+			return
+		}
+		var body struct{ Code, Phone, Lang string }
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&body); err != nil {
+			write(w, 400, map[string]string{"error": "bad_request"})
+			return
+		}
+		mainBot.Lock()
+		c := cli
+		mainBot.Unlock()
+		if c == nil || !c.IsLoggedIn() {
+			write(w, 409, map[string]string{"error": "bot_offline"})
+			return
+		}
+		code := strings.ToUpper(strings.TrimSpace(body.Code))
+		if !codeRe.MatchString(code) {
+			write(w, 400, map[string]string{"error": "bad_code"})
+			return
+		}
+		var chat types.JID
+		if phone := strings.TrimPrefix(strings.TrimSpace(body.Phone), "+"); phone != "" {
+			res, err := c.IsOnWhatsApp(r.Context(), []string{"+" + phone})
+			if err != nil || len(res) == 0 || !res[0].IsIn {
+				write(w, 404, map[string]string{"error": "not_on_whatsapp"})
+				return
+			}
+			chat = res[0].JID
+		} else {
+			order, err := supa.GetOrder(code)
+			if err != nil || order == nil {
+				write(w, 404, map[string]string{"error": "order_not_found"})
+				return
+			}
+			var jidStr string
+			if b, err := supa.do("GET", "/rest/v1/orders?select=requester_jid&code=eq."+url.QueryEscape(code), nil, nil); err == nil {
+				var rows []struct {
+					J *string `json:"requester_jid"`
+				}
+				if json.Unmarshal(b, &rows) == nil && len(rows) > 0 && rows[0].J != nil {
+					jidStr = *rows[0].J
+				}
+			}
+			if jidStr == "" || jidStr == "self" {
+				write(w, 400, map[string]string{"error": "no_chat"})
+				return
+			}
+			if chat, err = types.ParseJID(jidStr); err != nil {
+				write(w, 400, map[string]string{"error": "bad_jid"})
+				return
+			}
+		}
+		if _, loaded := busy.LoadOrStore(code, true); loaded {
+			write(w, 409, map[string]string{"error": "busy"})
+			return
+		}
+		defer busy.Delete(code)
+		lang := body.Lang
+		if msgs[lang] == nil {
+			lang = "es"
+		}
+		if err := deliver(code, chat, msgs[lang], false); err != nil {
+			supa.Patch("orders", "code=eq."+code, map[string]any{"status": "failed", "error": err.Error()})
+			write(w, 500, map[string]string{"error": err.Error()})
+			return
+		}
+		log.Infof("pedido %s reenviado a %s", code, chat)
+		write(w, 200, map[string]string{"status": "sent", "chat": chat.String()})
 	})
 	// POST /bot {"action": "enable" | "disable" | "unlink"}
 	mux.HandleFunc("POST /bot", func(w http.ResponseWriter, r *http.Request) {
